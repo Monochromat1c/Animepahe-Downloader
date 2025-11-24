@@ -2,8 +2,8 @@ import sys
 import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
-    QLineEdit, QListWidget, QMessageBox, QDialog, QHBoxLayout,
-    QRadioButton, QButtonGroup, QGroupBox, QTextEdit, QInputDialog,
+    QLineEdit, QListWidget, QMessageBox, QHBoxLayout,
+    QRadioButton, QButtonGroup, QGroupBox,
     QProgressBar
 )
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -70,40 +70,16 @@ class AnimepaheGui(QWidget):
         self.status_label = QLabel("")
         self.layout.addWidget(self.status_label)
 
-        # --- Session Key Selection ---
-        key_box = QGroupBox("AnimePahe Session/Key Selection")
-        key_box_layout = QHBoxLayout()
-        self.key_mode_manual = QRadioButton("Manual")
-        self.key_mode_search = QRadioButton("Search Title")
-        self.key_mode_manual.setChecked(True)
-        self.key_button_group = QButtonGroup()
-        self.key_button_group.addButton(self.key_mode_manual)
-        self.key_button_group.addButton(self.key_mode_search)
-        key_box_layout.addWidget(self.key_mode_manual)
-        key_box_layout.addWidget(self.key_mode_search)
-        key_box.setLayout(key_box_layout)
-        self.layout.addWidget(key_box)
-
-        self.session_key_input = QLineEdit()
-        self.session_key_input.setPlaceholderText("Paste/Enter session key")
-        self.layout.addWidget(self.session_key_input)
-
+        # --- Session Key Selection (Search only) ---
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Enter anime title keyword (for search mode)")
-        self.search_input.setEnabled(False)
+        self.search_input.setPlaceholderText("Enter anime title keyword")
         self.layout.addWidget(self.search_input)
         self.search_btn = QPushButton("Search Anime")
         self.search_btn.clicked.connect(self.search_title)
-        self.search_btn.setEnabled(False)
         self.layout.addWidget(self.search_btn)
         self.results_list = QListWidget()
-        self.results_list.setEnabled(False)
         self.results_list.clicked.connect(self.select_searched_anime)
         self.layout.addWidget(self.results_list)
-
-        # Switch input modes
-        self.key_mode_manual.toggled.connect(self.toggle_key_mode)
-        self.key_mode_search.toggled.connect(self.toggle_key_mode)
 
         # --- Fetch metadata ---
         self.metadata_label = QLabel()
@@ -130,7 +106,7 @@ class AnimepaheGui(QWidget):
         self.episode_input.setEnabled(False)
         self.layout.addWidget(self.episode_input)
         self.resolution_input = QLineEdit()
-        self.resolution_input.setPlaceholderText("e.g., 720; leave blank for auto")
+        self.resolution_input.setPlaceholderText("e.g., 720; leave blank for highest resolution")
         self.resolution_input.setEnabled(False)
         self.layout.addWidget(self.resolution_input)
 
@@ -147,11 +123,6 @@ class AnimepaheGui(QWidget):
         self.progress_bar.setMaximum(100)
         self.layout.addWidget(self.progress_bar)
 
-        # --- Log ---
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        self.layout.addWidget(self.log_output)
-
         self.setLayout(self.layout)
 
     def state_reset(self):
@@ -163,8 +134,8 @@ class AnimepaheGui(QWidget):
         self.max_ep = None
 
     def log(self, txt):
-        self.log_output.append(txt)
-        self.log_output.ensureCursorVisible()
+        # Basic logging to console (GUI no longer shows log textbox)
+        print(txt)
 
     def refresh_anime_list(self):
         import os
@@ -200,18 +171,6 @@ class AnimepaheGui(QWidget):
             if not error_msg.strip():
                 error_msg = proc.stdout.decode(errors='ignore') if proc.stdout else "No error message available"
             self.log(f"[ERROR] Failed to refresh list: {error_msg}")
-
-    def toggle_key_mode(self):
-        if self.key_mode_manual.isChecked():
-            self.session_key_input.setEnabled(True)
-            self.search_input.setEnabled(False)
-            self.search_btn.setEnabled(False)
-            self.results_list.setEnabled(False)
-        else:
-            self.session_key_input.setEnabled(False)
-            self.search_input.setEnabled(True)
-            self.search_btn.setEnabled(True)
-            self.results_list.setEnabled(True)
 
     def search_title(self):
         keyword = self.search_input.text().strip()
@@ -277,10 +236,8 @@ class AnimepaheGui(QWidget):
     def metadata_fetch(self):
         import os, json, re
         if not self.session_key:
-            if not self.session_key_input.text().strip():
-                self.status_label.setText("Session key required.")
-                return
-            self.session_key = self.session_key_input.text().strip()
+            self.status_label.setText("Select an anime from the search results first.")
+            return
         self.metadata_label.setText("Fetching metadata...")
         # Determine intended folder directory for this session_key/title
         folder = None
@@ -384,10 +341,8 @@ class AnimepaheGui(QWidget):
 
     def start_download(self):
         if not self.session_key:
-            if not self.session_key_input.text().strip():
-                self.status_label.setText("Session key required.")
-                return
-            self.session_key = self.session_key_input.text().strip()
+            self.status_label.setText("Select an anime from the search results first.")
+            return
         if not self.anime_folder:
             self.metadata_fetch()
             if not self.anime_folder:
