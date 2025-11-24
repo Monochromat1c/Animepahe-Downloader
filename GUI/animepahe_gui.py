@@ -290,8 +290,8 @@ class AnimepaheGui(QWidget):
             m = re.match(r"\[([a-zA-Z0-9-]+)\] *(.*)", line)
             if m:
                 folder_candidate = m.group(2).strip()
-                # Use only safe characters for folder name
-                folder_candidate = re.sub(r'[^a-zA-Z0-9 _\-\(\)\+]', '_', folder_candidate)
+                # Match animepahe-dl.sh sanitization: allow spaces, commas, +, -, (, )
+                folder_candidate = re.sub(r'[^a-zA-Z0-9 ,\+\-\(\)]', '_', folder_candidate)
                 if os.path.isdir(folder_candidate):
                     folder = folder_candidate
         # Otherwise, search for any existing folders matching session_key
