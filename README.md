@@ -31,7 +31,7 @@ Animepahe Downloader is a tool to search for and download anime episodes from [a
 - [fzf](https://github.com/junegunn/fzf) (Fuzzy finder) - *Not required for GUI*
 - [Node.js](https://nodejs.org/)
 - [ffmpeg](https://ffmpeg.org/)
-- [openssl](https://www.openssl.org/) *(optional, for parallel threads download)*
+- [openssl](https://www.openssl.org/)
 - `curl` (already required by the script)
 - Bash shell (Linux/macOS, or Git Bash/WSL on Windows) - *Required for running the backend scripts*
 
