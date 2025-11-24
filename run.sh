@@ -208,6 +208,30 @@ ask_resolution() {
 }
 
 # ---------------------------------
+# Manual: Ask audio language
+# ---------------------------------
+ask_audio() {
+    echo -e "\n${BLUE}--- Audio Selection ---${NC}"
+    echo -e " ${CYAN}Press ENTER for default 'jpn' audio${NC}"
+
+    while true; do
+        read -p "$(echo -e "${GREEN}Audio language code (e.g., jpn, eng):${NC} ")" AUDIO
+
+        if [[ -z "$AUDIO" ]]; then
+            AUDIO="jpn"
+            break
+        fi
+
+        if [[ "$AUDIO" =~ ^[a-zA-Z]+$ ]]; then
+            AUDIO=${AUDIO,,}
+            break
+        else
+            echo -e "${RED}[ERROR] Invalid audio code. Letters only.${NC}"
+        fi
+    done
+}
+
+# ---------------------------------
 # Main
 # ---------------------------------
 ask_key
@@ -228,11 +252,12 @@ fi
 # Manual mode:
 ask_episode
 ask_resolution
+ask_audio
 
 echo -e "\n${YELLOW}* Starting Manual Download...${NC}"
 
 if [[ "$AUTO_RES" = true ]]; then
-    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o jpn -t 16
+    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o "$AUDIO" -t 16
 else
-    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -r "$RESOLUTION" -o jpn -t 16
+    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -r "$RESOLUTION" -o "$AUDIO" -t 16
 fi
