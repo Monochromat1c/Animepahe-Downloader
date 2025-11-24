@@ -1,5 +1,7 @@
 import sys
 import os
+import re
+import json
 import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
@@ -88,13 +90,43 @@ class AnimepaheGui(QWidget):
         self.status_label = QLabel("")
         self.layout.addWidget(self.status_label)
 
-        # --- Session Key Selection (Search only) ---
+        # --- Session Key Selection ---
+        self.key_box = QGroupBox("AnimePahe Session/Key Selection")
+        key_box_layout = QVBoxLayout()
+
+        key_mode_layout = QHBoxLayout()
+        self.key_mode_manual = QRadioButton("Manual session key")
+        self.key_mode_search = QRadioButton("Search title")
+        self.key_mode_search.setChecked(True)
+        key_mode_layout.addWidget(self.key_mode_manual)
+        key_mode_layout.addWidget(self.key_mode_search)
+        key_box_layout.addLayout(key_mode_layout)
+
+        manual_layout = QHBoxLayout()
+        self.session_key_input = QLineEdit()
+        self.session_key_input.setPlaceholderText("Paste/Enter session key")
+        self.session_key_input.setEnabled(False)
+        self.use_key_btn = QPushButton("Use Key")
+        self.use_key_btn.setEnabled(False)
+        self.use_key_btn.clicked.connect(self.use_manual_key)
+        manual_layout.addWidget(self.session_key_input)
+        manual_layout.addWidget(self.use_key_btn)
+        key_box_layout.addLayout(manual_layout)
+
+        search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Enter anime title keyword")
-        self.layout.addWidget(self.search_input)
         self.search_btn = QPushButton("Search Anime")
         self.search_btn.clicked.connect(self.search_title)
-        self.layout.addWidget(self.search_btn)
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_btn)
+        key_box_layout.addLayout(search_layout)
+
+        self.key_box.setLayout(key_box_layout)
+        self.layout.addWidget(self.key_box)
+
+        self.key_mode_manual.toggled.connect(self.toggle_key_mode)
+        self.key_mode_search.toggled.connect(self.toggle_key_mode)
         self.results_list = QListWidget()
         self.results_list.clicked.connect(self.select_searched_anime)
         self.layout.addWidget(self.results_list)
@@ -176,6 +208,7 @@ class AnimepaheGui(QWidget):
         self.layout.addWidget(self.episode_table)
 
         self.setLayout(self.layout)
+        self.toggle_key_mode()
 
     def state_reset(self):
         self.session_key = None
@@ -188,6 +221,7 @@ class AnimepaheGui(QWidget):
         self.queue_running = False
         self.current_queue_index = -1
         self.current_worker = None
+        self.session_folder_cache = {}
 
     def _env_with_output_dir(self):
         env = os.environ.copy()
@@ -278,6 +312,27 @@ class AnimepaheGui(QWidget):
         else:
             self.status_label.setText("No matches found.")
 
+    def toggle_key_mode(self):
+        manual = self.key_mode_manual.isChecked()
+        self.session_key_input.setEnabled(manual)
+        self.use_key_btn.setEnabled(manual)
+        self.search_input.setEnabled(not manual)
+        self.search_btn.setEnabled(not manual)
+        self.results_list.setEnabled(not manual)
+
+    def use_manual_key(self):
+        if not self.key_mode_manual.isChecked():
+            return
+        key = self.session_key_input.text().strip()
+        if not key:
+            QMessageBox.warning(self, "Missing Input", "Please enter a session key.")
+            return
+        self.session_key = key
+        self.selected_line = None
+        self.anime_title = f"Manual Session ({key[:8]})"
+        self.status_label.setText(f"Using manual session key: {key}")
+        self.metadata_fetch()
+
     def select_searched_anime(self):
         row = self.results_list.currentRow()
         if row < 0 or not hasattr(self, 'results_items'):
@@ -297,104 +352,85 @@ class AnimepaheGui(QWidget):
             self.metadata_fetch()
 
     def metadata_fetch(self):
-        import os, json, re
         if not self.session_key:
             self.status_label.setText("Select an anime from the search results first.")
             return
         self.metadata_label.setText("Fetching metadata...")
-        # Determine intended folder directory for this session_key/title
-        folder = None
-        # Try to use the best title (from search or manual)
-        if self.selected_line:
-            line = self.selected_line
-            m = re.match(r"\[([a-zA-Z0-9-]+)\] *(.*)", line)
-            if m:
-                folder_candidate = m.group(2).strip()
-                folder_candidate = re.sub(r'[^a-zA-Z0-9 ,\+\-\(\)]', '_', folder_candidate)
-                abs_folder_candidate = os.path.join(self.download_dir, folder_candidate)
-                if os.path.isdir(abs_folder_candidate):
-                    folder = abs_folder_candidate
-        # Otherwise, search for any existing folders matching session_key
-        if not folder:
-            for d in os.listdir(self.download_dir):
-                abs_d = os.path.join(self.download_dir, d)
-                if os.path.isdir(abs_d):
-                    src = os.path.join(abs_d, '.source.json')
-                    if os.path.exists(src):
-                        try:
-                            with open(src, encoding="utf-8") as sf:
-                                jdata = json.load(sf)
-                                found = False
-                                if 'episodes' in jdata:
-                                    found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata['episodes'])
-                                if not found and 'data' in jdata:
-                                    found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata['data'])
-                                if found:
-                                    folder = abs_d
-                                    break
-                        except Exception:
-                            pass
-        anime_folder = folder
-        source_file = os.path.join(anime_folder, '.source.json') if anime_folder else None
-        if anime_folder and os.path.exists(source_file):
-            # Reuse present metadata
-            try:
-                with open(source_file, encoding="utf-8") as sf:
-                    data = json.load(sf)
-                    ep_field = 'episodes' if 'episodes' in data else 'data' if 'data' in data else None
-                    if ep_field:
-                        eps = [int(e['episode']) for e in data[ep_field] if 'episode' in e]
-                        min_ep = min(eps)
-                        max_ep = max(eps)
-                        self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
-                        self.anime_folder = anime_folder
-                        self.min_ep = min_ep
-                        self.max_ep = max_ep
-                        self.mode_box.setEnabled(True)
-                        self.add_queue_btn.setEnabled(True)
-                        self.toggle_manual_fields()
-                        return
-            except Exception as e:
-                self.metadata_label.setText(f"[ERROR] Failed to parse metadata: {e}")
-                self.log(f"[META] {e}")
-                return
-        # If we get here, metadata doesn't exist - run fetch
+        existing_folder = self._get_existing_metadata_folder()
+        if existing_folder and self._load_metadata_from_folder(existing_folder):
+            return
         proc = subprocess.run(
             ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", self.session_key, "-e", "1", "-r", "360", "-o", "jpn", "-t", "1", "-l"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=self._env_with_output_dir()
         )
-        # Now search for correct folder again (it should exist after fetch)
-        dirs = [d for d in os.listdir(self.download_dir) if os.path.isdir(os.path.join(self.download_dir, d)) and not d.startswith('animepahe-dl')]
-        dirs.sort(key=lambda d: os.path.getmtime(os.path.join(self.download_dir, d)), reverse=True)
-        anime_folder = None
-        for d in dirs:
-            abs_d = os.path.join(self.download_dir, d)
-            src = os.path.join(abs_d, '.source.json')
-            if os.path.exists(src):
-                with open(src, encoding="utf-8") as sf:
-                    try:
-                        jdata = json.load(sf)
-                        ep_field = 'episodes' if 'episodes' in jdata else 'data' if 'data' in jdata else None
-                        found = False
-                        if ep_field:
-                            found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata[ep_field])
-                        if found:
-                            eps = [int(e['episode']) for e in jdata[ep_field] if 'episode' in e]
-                            min_ep = min(eps)
-                            max_ep = max(eps)
-                            self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
-                            self.anime_folder = abs_d
-                            self.min_ep = min_ep
-                            self.max_ep = max_ep
-                            self.mode_box.setEnabled(True)
-                            self.add_queue_btn.setEnabled(True)
-                            self.toggle_manual_fields()
-                            return
-                    except Exception as e:
-                        continue
+        latest_folder = self._get_latest_metadata_folder()
+        if latest_folder and self._load_metadata_from_folder(latest_folder):
+            return
         self.metadata_label.setText("[ERROR] Could not find metadata folder.")
         self.log(proc.stderr.decode(errors='ignore'))
+
+    def _sanitize_folder_name(self, title):
+        return re.sub(r'[^0-9A-Za-z ,\+\-\)\(]', '_', title).rstrip()
+
+    def _get_existing_metadata_folder(self):
+        cached = self.session_folder_cache.get(self.session_key)
+        if cached and os.path.exists(os.path.join(cached, '.source.json')):
+            return cached
+        if self.selected_line:
+            line = self.selected_line
+            m = re.match(r"\[([a-zA-Z0-9-]+)\] *(.*)", line)
+            if m:
+                folder_candidate = self._sanitize_folder_name(m.group(2).strip())
+                abs_folder_candidate = os.path.join(self.download_dir, folder_candidate)
+                if os.path.isdir(abs_folder_candidate):
+                    return abs_folder_candidate
+        return None
+
+    def _get_latest_metadata_folder(self):
+        candidates = []
+        for d in os.listdir(self.download_dir):
+            abs_d = os.path.join(self.download_dir, d)
+            if os.path.isdir(abs_d):
+                src = os.path.join(abs_d, '.source.json')
+                if os.path.exists(src):
+                    candidates.append(abs_d)
+        candidates.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        return candidates[0] if candidates else None
+
+    def _load_metadata_from_folder(self, folder_path):
+        source_file = os.path.join(folder_path, '.source.json')
+        if not os.path.exists(source_file):
+            return False
+        try:
+            with open(source_file, encoding="utf-8") as sf:
+                data = json.load(sf)
+        except Exception as e:
+            self.metadata_label.setText(f"[ERROR] Failed to parse metadata: {e}")
+            self.log(f"[META] {e}")
+            return False
+
+        ep_field = 'episodes' if 'episodes' in data else 'data' if 'data' in data else None
+        if not ep_field:
+            self.metadata_label.setText("[ERROR] Metadata missing episodes list.")
+            return False
+
+        eps = [int(e['episode']) for e in data[ep_field] if 'episode' in e]
+        if not eps:
+            self.metadata_label.setText("[ERROR] Metadata contains no episodes.")
+            return False
+
+        min_ep = min(eps)
+        max_ep = max(eps)
+        self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
+        self.anime_folder = folder_path
+        self.min_ep = min_ep
+        self.max_ep = max_ep
+        self.mode_box.setEnabled(True)
+        self.add_queue_btn.setEnabled(True)
+        self.toggle_manual_fields()
+        self.session_folder_cache[self.session_key] = folder_path
+        return True
 
     def toggle_manual_fields(self):
         manual = self.manual_mode_radio.isChecked()

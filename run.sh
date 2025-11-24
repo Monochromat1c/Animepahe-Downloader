@@ -75,14 +75,34 @@ search_title() {
 
 
 # ---------------------------------
-# Ask for session key (search only)
+# Ask for session key
 # ---------------------------------
 ask_key() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${CYAN}AnimePahe Key Selection${NC}"
     echo -e "${BLUE}========================================${NC}"
-    echo -e "${YELLOW}- Please search for an anime title (recommended)${NC}"
-    search_title
+    echo -e "${YELLOW}1.${NC} Enter session key manually"
+    echo -e "${YELLOW}2.${NC} Search for anime title (from anime.list)"
+
+    while true; do
+        read -p "$(echo -e "${GREEN}Choose option:${NC} ")" opt
+        case $opt in
+            1)
+                read -p "$(echo -e "${GREEN}Enter session key:${NC} ")" KEY
+                if [[ -n "$KEY" ]]; then
+                    break
+                fi
+                echo -e "${RED}[ERROR] Key cannot be empty.${NC}"
+                ;;
+            2)
+                search_title
+                break
+                ;;
+            *)
+                echo -e "${RED}[ERROR] Invalid option.${NC}"
+                ;;
+        esac
+    done
 }
 
 
