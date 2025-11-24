@@ -1,4 +1,5 @@
 import sys
+import os
 import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
@@ -15,9 +16,11 @@ class DownloadWorker(QThread):
     progress_signal = pyqtSignal(int)  # Completed episode count
     episode_status_signal = pyqtSignal(int, int, str)  # row index, episode number, status text
 
-    def __init__(self, queue_item):
+    def __init__(self, queue_item, output_dir):
         super().__init__()
         self.queue_item = queue_item
+        self.env = os.environ.copy()
+        self.env["ANIMEPAHE_DL_OUTPUT_DIR"] = output_dir
 
     def run(self):
         import subprocess
@@ -48,6 +51,7 @@ class DownloadWorker(QThread):
                 stderr=subprocess.STDOUT,
                 bufsize=1,
                 universal_newlines=True,
+                env=self.env
             )
             for line in proc.stdout:
                 self.log_signal.emit(f"[Episode {ep}] {line.rstrip()}")
@@ -73,6 +77,8 @@ class AnimepaheGui(QWidget):
         super().__init__()
         self.setWindowTitle("Animepahe Downloader GUI")
         self.layout = QVBoxLayout()
+        self.download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        os.makedirs(self.download_dir, exist_ok=True)
         self.state_reset()
 
         # --- Refresh anime list ---
@@ -183,6 +189,11 @@ class AnimepaheGui(QWidget):
         self.current_queue_index = -1
         self.current_worker = None
 
+    def _env_with_output_dir(self):
+        env = os.environ.copy()
+        env["ANIMEPAHE_DL_OUTPUT_DIR"] = self.download_dir
+        return env
+
     def log(self, txt):
         # Basic logging to console (GUI no longer shows log textbox)
         print(txt)
@@ -199,7 +210,8 @@ class AnimepaheGui(QWidget):
             ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh"],
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
-            timeout=60  # Timeout after 60 seconds if something hangs
+            timeout=60,  # Timeout after 60 seconds if something hangs
+            env=self._env_with_output_dir()
         )
         
         # Check if anime.list was created/updated
@@ -298,28 +310,27 @@ class AnimepaheGui(QWidget):
             m = re.match(r"\[([a-zA-Z0-9-]+)\] *(.*)", line)
             if m:
                 folder_candidate = m.group(2).strip()
-                # Match animepahe-dl.sh sanitization: allow spaces, commas, +, -, (, )
                 folder_candidate = re.sub(r'[^a-zA-Z0-9 ,\+\-\(\)]', '_', folder_candidate)
-                if os.path.isdir(folder_candidate):
-                    folder = folder_candidate
+                abs_folder_candidate = os.path.join(self.download_dir, folder_candidate)
+                if os.path.isdir(abs_folder_candidate):
+                    folder = abs_folder_candidate
         # Otherwise, search for any existing folders matching session_key
         if not folder:
-            # Use <something> directory where .source.json contains this session_key
-            for d in os.listdir('.'):
-                if os.path.isdir(d):
-                    src = os.path.join(d, '.source.json')
+            for d in os.listdir(self.download_dir):
+                abs_d = os.path.join(self.download_dir, d)
+                if os.path.isdir(abs_d):
+                    src = os.path.join(abs_d, '.source.json')
                     if os.path.exists(src):
                         try:
                             with open(src, encoding="utf-8") as sf:
                                 jdata = json.load(sf)
-                                # check slug/key in either top-level or nested data
                                 found = False
                                 if 'episodes' in jdata:
                                     found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata['episodes'])
                                 if not found and 'data' in jdata:
                                     found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata['data'])
                                 if found:
-                                    folder = d
+                                    folder = abs_d
                                     break
                         except Exception:
                             pass
@@ -350,14 +361,16 @@ class AnimepaheGui(QWidget):
         # If we get here, metadata doesn't exist - run fetch
         proc = subprocess.run(
             ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", self.session_key, "-e", "1", "-r", "360", "-o", "jpn", "-t", "1", "-l"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=self._env_with_output_dir()
         )
         # Now search for correct folder again (it should exist after fetch)
-        dirs = [d for d in os.listdir('.') if os.path.isdir(d) and not d.startswith('animepahe-dl')]
-        dirs.sort(key=os.path.getmtime, reverse=True)
+        dirs = [d for d in os.listdir(self.download_dir) if os.path.isdir(os.path.join(self.download_dir, d)) and not d.startswith('animepahe-dl')]
+        dirs.sort(key=lambda d: os.path.getmtime(os.path.join(self.download_dir, d)), reverse=True)
         anime_folder = None
         for d in dirs:
-            src = os.path.join(d, '.source.json')
+            abs_d = os.path.join(self.download_dir, d)
+            src = os.path.join(abs_d, '.source.json')
             if os.path.exists(src):
                 with open(src, encoding="utf-8") as sf:
                     try:
@@ -371,12 +384,9 @@ class AnimepaheGui(QWidget):
                             min_ep = min(eps)
                             max_ep = max(eps)
                             self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
-                            self.anime_folder = d
+                            self.anime_folder = abs_d
                             self.min_ep = min_ep
                             self.max_ep = max_ep
-                            self.mode_box.setEnabled(True)
-                            self.add_queue_btn.setEnabled(True)
-                            self.toggle_manual_fields()
                             self.mode_box.setEnabled(True)
                             self.add_queue_btn.setEnabled(True)
                             self.toggle_manual_fields()
@@ -536,7 +546,7 @@ class AnimepaheGui(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat(f"0/{len(episodes)} episodes")
 
-        self.current_worker = DownloadWorker(item)
+        self.current_worker = DownloadWorker(item, self.download_dir)
         self.current_worker.log_signal.connect(self.log)
         self.current_worker.status_signal.connect(self.status_label.setText)
         self.current_worker.progress_signal.connect(self._update_progress)

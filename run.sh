@@ -9,6 +9,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+DOWNLOAD_DIR="${HOME}/Downloads"
+mkdir -p "$DOWNLOAD_DIR"
+
 # Auto-refresh anime list
 echo "[INFO] Refreshing anime list..."
 ./animepahe-dl.sh --list > /dev/null 2>&1
@@ -89,7 +92,7 @@ ask_key() {
 fetch_metadata() {
     echo -e "\n${YELLOW}* Fetching episode data...${NC}"
 
-    ./animepahe-dl.sh -s "$KEY" -e 1 -r 360 -o jpn -t 1 -l >/dev/null 2>&1
+    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e 1 -r 360 -o jpn -t 1 -l >/dev/null 2>&1
 
     ANIME_FOLDER=$(ls -d */ 2>/dev/null | grep -v "animepahe-dl" | head -1)
     ANIME_FOLDER="${ANIME_FOLDER%/}"
@@ -245,7 +248,7 @@ if [[ "$AUTO_MODE" = true ]]; then
     echo -e "${CYAN}Downloading ALL episodes in highest resolution...${NC}"
     echo -e "${CYAN}Episode range: $EPISODE${NC}"
 
-    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o jpn -t 16
+    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o jpn -t 16
     exit
 fi
 
@@ -257,7 +260,7 @@ ask_audio
 echo -e "\n${YELLOW}* Starting Manual Download...${NC}"
 
 if [[ "$AUTO_RES" = true ]]; then
-    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o "$AUDIO" -t 16
+    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o "$AUDIO" -t 16
 else
-    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -r "$RESOLUTION" -o "$AUDIO" -t 16
+    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -r "$RESOLUTION" -o "$AUDIO" -t 16
 fi
