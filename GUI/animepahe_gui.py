@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
     QLineEdit, QListWidget, QMessageBox, QDialog, QHBoxLayout,
     QRadioButton, QButtonGroup, QGroupBox, QTextEdit, QInputDialog,
-    QProgressBar
+    QProgressBar, QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -142,16 +142,46 @@ class AnimepaheGui(QWidget):
         self.layout.addWidget(self.download_btn)
 
         # --- Progress Bar ---
+        self.current_title_label = QLabel()
+        self.layout.addWidget(self.current_title_label)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.layout.addWidget(self.progress_bar)
+        # --- Stop button ---
+        self.stop_btn = QPushButton("Stop Download")
+        self.stop_btn.clicked.connect(self.stop_download)
+        self.stop_btn.setEnabled(False)
+        self.layout.addWidget(self.stop_btn)
 
         # --- Log ---
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.layout.addWidget(self.log_output)
+
+        # --- Queue controls ---
+        self.queue_list = QListWidget()
+        self.layout.addWidget(QLabel("Download Queue"))
+        self.layout.addWidget(self.queue_list)
+        qbtn_layout = QHBoxLayout()
+        self.add_to_queue_btn = QPushButton("Add to Queue")
+        self.add_to_queue_btn.clicked.connect(self.add_to_queue)
+        qbtn_layout.addWidget(self.add_to_queue_btn)
+        self.start_queue_btn = QPushButton("Start Queue Download")
+        self.start_queue_btn.clicked.connect(self.start_queue_downloads)
+        qbtn_layout.addWidget(self.start_queue_btn)
+        self.remove_queue_btn = QPushButton("Remove Selected")
+        self.remove_queue_btn.clicked.connect(self.remove_selected_queue_item)
+        qbtn_layout.addWidget(self.remove_queue_btn)
+        self.clear_queue_btn = QPushButton("Clear Queue")
+        self.clear_queue_btn.clicked.connect(self.clear_queue)
+        qbtn_layout.addWidget(self.clear_queue_btn)
+        self.layout.addLayout(qbtn_layout)
+
+        self.queue = []
+        self.queue_active_index = -1
+        self.downloading_queue = False
 
         self.setLayout(self.layout)
 
@@ -428,12 +458,127 @@ class AnimepaheGui(QWidget):
             self.progress_bar.setMaximum(0)
             self.progress_bar.setFormat("Downloading...")
         
+        self.stop_btn.setEnabled(True)
         self.worker = DownloadWorker(cmd, total_episodes=total_eps)
         self.worker.log_signal.connect(self.log)
         self.worker.status_signal.connect(self.status_label.setText)
         self.worker.progress_signal.connect(self._update_progress)
         self.worker.done_signal.connect(self._download_finished)
         self.worker.start()
+        # Display only title, not session key
+        display_title = None
+        if self.selected_line:
+            import re
+            m = re.match(r'\[([a-zA-Z0-9-]+)\]\s*(.*)', self.selected_line)
+            if m and m.group(2).strip():
+                display_title = m.group(2).strip()
+            else:
+                display_title = self.selected_line.strip()
+        elif hasattr(self, 'anime_title') and self.anime_title:
+            display_title = self.anime_title.strip()
+        else:
+            display_title = "(Untitled)"
+        self.current_title_label.setText(f"Now Downloading: {display_title}")
+
+    def add_to_queue(self):
+        # Add current configuration as a queue entry
+        if not self.session_key and not self.session_key_input.text().strip():
+            self.status_label.setText("Session key required.")
+            return
+        keyval = self.session_key or self.session_key_input.text().strip()
+        titleval = self.selected_line or self.anime_title or keyval
+        auto = self.auto_mode_radio.isChecked()
+        min_ep = self.min_ep or 1
+        max_ep = self.max_ep or 1
+        if auto:
+            ep_val = f"{min_ep}-{max_ep}"
+            res_val = None
+            audio_val = 'jpn'
+        else:
+            ep_val = self.episode_input.text().strip() or f"{min_ep}-{max_ep}"
+            res_val = self.resolution_input.text().strip()
+            audio_val = self.audio_input.text().strip() or 'jpn'
+            valid = self.check_episode_valid(ep_val, min_ep, max_ep)
+            if not valid:
+                self.status_label.setText("Invalid episode list!")
+                return
+        item = {
+            'session_key': keyval,
+            'display_title': titleval,
+            'episodes': ep_val,
+            'audio': audio_val,
+            'resolution': res_val,
+            'min_ep': min_ep,
+            'max_ep': max_ep
+        }
+        self.queue.append(item)
+        desc = f"{titleval if titleval else keyval}: Ep {ep_val} | Audio: {audio_val} | Res: {res_val if res_val else 'auto'}"
+        self.queue_list.addItem(desc)
+        self.status_label.setText(f"Item added to queue. Queue length: {len(self.queue)}")
+
+    def remove_selected_queue_item(self):
+        row = self.queue_list.currentRow()
+        if row >= 0:
+            self.queue_list.takeItem(row)
+            del self.queue[row]
+            self.status_label.setText(f"Removed from queue. Queue length: {len(self.queue)}")
+
+    def clear_queue(self):
+        self.queue_list.clear()
+        self.queue = []
+        self.status_label.setText("Queue cleared.")
+
+    def start_queue_downloads(self):
+        if self.downloading_queue or not self.queue:
+            return
+        self.downloading_queue = True
+        self.status_label.setText("Starting batch downloads...")
+        self.queue_active_index = -1
+        self._start_queue_item()
+
+    def _start_queue_item(self):
+        # Move to the next queued download
+        self.queue_active_index += 1
+        if self.queue_active_index >= len(self.queue):
+            self.downloading_queue = False
+            self.status_label.setText("All queue downloads finished.")
+            return
+        item = self.queue[self.queue_active_index]
+        # Try to show only title and not key for queue as well
+        display_title = item.get('display_title')
+        if display_title:
+            import re
+            m = re.match(r'\[([a-zA-Z0-9-]+)\]\s*(.*)', display_title)
+            if m and m.group(2).strip():
+                display_title = m.group(2).strip()
+        else:
+            display_title = '(Untitled)'
+        self.current_title_label.setText(f"Now Downloading: {display_title}")
+        cmd = ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", str(item['session_key']), "-e", item['episodes'], "-o", item['audio'], "-t", "16"]
+        if item['resolution']:
+            cmd.extend(["-r", item['resolution']])
+        total_eps = self._count_episodes(item['episodes'], item['min_ep'], item['max_ep'])
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        if total_eps > 0:
+            self.progress_bar.setMaximum(total_eps)
+            self.progress_bar.setFormat("Queue Download: %p% (%v/%m episodes)")
+        else:
+            self.progress_bar.setMaximum(0)
+            self.progress_bar.setFormat("Queue Download: ...")
+        self.stop_btn.setEnabled(True)
+        self.worker = DownloadWorker(cmd, total_episodes=total_eps)
+        self.worker.log_signal.connect(self.log)
+        self.worker.status_signal.connect(self.status_label.setText)
+        self.worker.progress_signal.connect(self._update_progress)
+        self.worker.done_signal.connect(self._queue_item_finished)
+        self.worker.start()
+
+    def stop_download(self):
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.terminate()
+            self.stop_btn.setEnabled(False)
+            self.status_label.setText("Download stopped by user.")
 
     def check_episode_valid(self, eptext, min_ep, max_ep):
         # Accepts: '1,2,3', '1-4', '3', etc.
@@ -478,6 +623,7 @@ class AnimepaheGui(QWidget):
     def _download_finished(self, success):
         """Handle download completion"""
         self.download_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         if success:
             self.progress_bar.setValue(self.progress_bar.maximum())
             self.progress_bar.setFormat("Completed: 100%")
@@ -485,6 +631,14 @@ class AnimepaheGui(QWidget):
             self.progress_bar.setFormat("Failed")
         # Keep progress bar visible for a moment, then hide after a delay
         # For now, just keep it visible so user can see final status
+
+    def _queue_item_finished(self, success):
+        self.stop_btn.setEnabled(False)
+        if success:
+            self.progress_bar.setFormat("Completed: 100%")
+        else:
+            self.progress_bar.setFormat("Failed")
+        self._start_queue_item()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
