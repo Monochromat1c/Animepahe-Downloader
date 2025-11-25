@@ -1,13 +1,10 @@
 import sys
-import os
-import re
-import json
 import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout,
-    QLineEdit, QListWidget, QMessageBox, QHBoxLayout,
-    QRadioButton, QButtonGroup, QGroupBox,
-    QProgressBar, QTableWidget, QTableWidgetItem
+    QLineEdit, QListWidget, QMessageBox, QDialog, QHBoxLayout,
+    QRadioButton, QButtonGroup, QGroupBox, QTextEdit, QInputDialog,
+    QProgressBar
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -15,72 +12,55 @@ class DownloadWorker(QThread):
     log_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
     done_signal = pyqtSignal(bool)
-    progress_signal = pyqtSignal(int)  # Completed episode count
-    episode_status_signal = pyqtSignal(int, int, str)  # row index, episode number, status text
-
-    def __init__(self, queue_item, output_dir):
+    progress_signal = pyqtSignal(int)  # Emit progress value (episode count or percentage)
+    
+    def __init__(self, cmd, total_episodes=None):
         super().__init__()
-        self.queue_item = queue_item
-        self.env = os.environ.copy()
-        self.env["ANIMEPAHE_DL_OUTPUT_DIR"] = output_dir
+        self.cmd = cmd
+        self.total_episodes = total_episodes
 
     def run(self):
         import subprocess
-        audio_opt = self.queue_item.get("audio") or "jpn"
-        base_cmd = [
-            "C:\\Program Files\\Git\\bin\\bash.exe",
-            "animepahe-dl.sh",
-            "-s",
-            str(self.queue_item["session_key"]),
-            "-o",
-            audio_opt,
-            "-t",
-            "16",
-        ]
-        if self.queue_item.get("resolution"):
-            base_cmd.extend(["-r", self.queue_item["resolution"]])
-
-        episodes = self.queue_item["episodes"]
-        completed = 0
-        all_success = True
-
-        for idx, ep in enumerate(episodes):
-            cmd = base_cmd + ["-e", str(ep)]
-            self.episode_status_signal.emit(idx, ep, "Downloading")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                universal_newlines=True,
-                env=self.env
-            )
-            for line in proc.stdout:
-                self.log_signal.emit(f"[Episode {ep}] {line.rstrip()}")
-            proc.wait()
-
-            if proc.returncode == 0:
-                status = "Completed"
-                completed += 1
-                self.progress_signal.emit(completed)
-            else:
-                status = "Failed"
-                all_success = False
-            self.episode_status_signal.emit(idx, ep, status)
-
-        if all_success:
-            self.status_signal.emit("Download completed!")
+        import re
+        proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1, universal_newlines=True)
+        completed_episodes = set()
+        for line in proc.stdout:
+            self.log_signal.emit(line.rstrip())
+            # Try to parse episode progress from log output
+            # Look for patterns like "Downloading Episode X" or completion indicators
+            if self.total_episodes and self.total_episodes > 0:
+                # Look for episode numbers in the output
+                ep_match = re.search(r'[Ee]pisode\s+(\d+)', line)
+                if ep_match:
+                    ep_num = int(ep_match.group(1))
+                    if ep_num not in completed_episodes:
+                        completed_episodes.add(ep_num)
+                        # Emit episode count (progress bar max is set to total_episodes)
+                        self.progress_signal.emit(len(completed_episodes))
+                # Also check for completion indicators like "Episode X.mp4" or similar
+                if re.search(r'\.mp4|completed|finished', line, re.IGNORECASE):
+                    # If we see completion indicators, update progress
+                    if len(completed_episodes) < self.total_episodes:
+                        self.progress_signal.emit(len(completed_episodes))
+        proc.wait()
+        # Set progress to max when done
+        if self.total_episodes and self.total_episodes > 0:
+            self.progress_signal.emit(self.total_episodes)
         else:
-            self.status_signal.emit("Download finished with errors.")
-        self.done_signal.emit(all_success)
+            # For indeterminate mode, emit 100 for percentage
+            self.progress_signal.emit(100)
+        if proc.returncode == 0:
+            self.status_signal.emit("Download completed!")
+            self.done_signal.emit(True)
+        else:
+            self.status_signal.emit("Download failed (see log)")
+            self.done_signal.emit(False)
 
 class AnimepaheGui(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Animepahe Downloader GUI")
         self.layout = QVBoxLayout()
-        self.download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-        os.makedirs(self.download_dir, exist_ok=True)
         self.state_reset()
 
         # --- Refresh anime list ---
@@ -91,45 +71,39 @@ class AnimepaheGui(QWidget):
         self.layout.addWidget(self.status_label)
 
         # --- Session Key Selection ---
-        self.key_box = QGroupBox("AnimePahe Session/Key Selection")
-        key_box_layout = QVBoxLayout()
+        key_box = QGroupBox("AnimePahe Session/Key Selection")
+        key_box_layout = QHBoxLayout()
+        self.key_mode_manual = QRadioButton("Manual")
+        self.key_mode_search = QRadioButton("Search Title")
+        self.key_mode_manual.setChecked(True)
+        self.key_button_group = QButtonGroup()
+        self.key_button_group.addButton(self.key_mode_manual)
+        self.key_button_group.addButton(self.key_mode_search)
+        key_box_layout.addWidget(self.key_mode_manual)
+        key_box_layout.addWidget(self.key_mode_search)
+        key_box.setLayout(key_box_layout)
+        self.layout.addWidget(key_box)
 
-        key_mode_layout = QHBoxLayout()
-        self.key_mode_manual = QRadioButton("Manual session key")
-        self.key_mode_search = QRadioButton("Search title")
-        self.key_mode_search.setChecked(True)
-        key_mode_layout.addWidget(self.key_mode_manual)
-        key_mode_layout.addWidget(self.key_mode_search)
-        key_box_layout.addLayout(key_mode_layout)
-
-        manual_layout = QHBoxLayout()
         self.session_key_input = QLineEdit()
         self.session_key_input.setPlaceholderText("Paste/Enter session key")
-        self.session_key_input.setEnabled(False)
-        self.use_key_btn = QPushButton("Use Key")
-        self.use_key_btn.setEnabled(False)
-        self.use_key_btn.clicked.connect(self.use_manual_key)
-        manual_layout.addWidget(self.session_key_input)
-        manual_layout.addWidget(self.use_key_btn)
-        key_box_layout.addLayout(manual_layout)
+        self.layout.addWidget(self.session_key_input)
 
-        search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Enter anime title keyword")
+        self.search_input.setPlaceholderText("Enter anime title keyword (for search mode)")
+        self.search_input.setEnabled(False)
+        self.layout.addWidget(self.search_input)
         self.search_btn = QPushButton("Search Anime")
         self.search_btn.clicked.connect(self.search_title)
-        search_layout.addWidget(self.search_input)
-        search_layout.addWidget(self.search_btn)
-        key_box_layout.addLayout(search_layout)
-
-        self.key_box.setLayout(key_box_layout)
-        self.layout.addWidget(self.key_box)
-
-        self.key_mode_manual.toggled.connect(self.toggle_key_mode)
-        self.key_mode_search.toggled.connect(self.toggle_key_mode)
+        self.search_btn.setEnabled(False)
+        self.layout.addWidget(self.search_btn)
         self.results_list = QListWidget()
+        self.results_list.setEnabled(False)
         self.results_list.clicked.connect(self.select_searched_anime)
         self.layout.addWidget(self.results_list)
+
+        # Switch input modes
+        self.key_mode_manual.toggled.connect(self.toggle_key_mode)
+        self.key_mode_search.toggled.connect(self.toggle_key_mode)
 
         # --- Fetch metadata ---
         self.metadata_label = QLabel()
@@ -149,8 +123,6 @@ class AnimepaheGui(QWidget):
         self.layout.addWidget(self.mode_box)
         self.auto_mode_radio.setChecked(True)
         self.mode_box.setEnabled(False)
-        self.auto_mode_radio.toggled.connect(self.toggle_manual_fields)
-        self.manual_mode_radio.toggled.connect(self.toggle_manual_fields)
 
         # --- Manual: Episode/Resolution ---
         self.episode_input = QLineEdit()
@@ -158,40 +130,15 @@ class AnimepaheGui(QWidget):
         self.episode_input.setEnabled(False)
         self.layout.addWidget(self.episode_input)
         self.resolution_input = QLineEdit()
-        self.resolution_input.setPlaceholderText("e.g., 720; leave blank for highest resolution")
+        self.resolution_input.setPlaceholderText("e.g., 720; leave blank for auto")
         self.resolution_input.setEnabled(False)
         self.layout.addWidget(self.resolution_input)
-        self.audio_input = QLineEdit()
-        self.audio_input.setPlaceholderText("e.g., eng/jpn/chi; leave blank for jpn audio")
-        self.audio_input.setEnabled(False)
-        self.layout.addWidget(self.audio_input)
 
-        # --- Queue Controls ---
-        queue_controls_layout = QHBoxLayout()
-        self.add_queue_btn = QPushButton("Add to Queue")
-        self.add_queue_btn.clicked.connect(self.add_to_queue)
-        self.add_queue_btn.setEnabled(False)
-        self.start_queue_btn = QPushButton("Start Queue")
-        self.start_queue_btn.clicked.connect(self.start_queue_downloads)
-        self.remove_queue_btn = QPushButton("Remove Selected")
-        self.remove_queue_btn.clicked.connect(self.remove_selected_queue_item)
-        self.clear_queue_btn = QPushButton("Clear Queue")
-        self.clear_queue_btn.clicked.connect(self.clear_queue)
-
-        queue_controls_layout.addWidget(self.add_queue_btn)
-        queue_controls_layout.addWidget(self.start_queue_btn)
-        queue_controls_layout.addWidget(self.remove_queue_btn)
-        queue_controls_layout.addWidget(self.clear_queue_btn)
-
-        queue_box = QGroupBox("Download Queue")
-        queue_layout = QVBoxLayout()
-        queue_layout.addLayout(queue_controls_layout)
-        self.queue_list = QListWidget()
-        queue_layout.addWidget(self.queue_list)
-        self.queue_status_label = QLabel("")
-        queue_layout.addWidget(self.queue_status_label)
-        queue_box.setLayout(queue_layout)
-        self.layout.addWidget(queue_box)
+        # --- Download ---
+        self.download_btn = QPushButton("Start Download")
+        self.download_btn.clicked.connect(self.start_download)
+        self.download_btn.setEnabled(False)
+        self.layout.addWidget(self.download_btn)
 
         # --- Progress Bar ---
         self.progress_bar = QProgressBar()
@@ -200,15 +147,12 @@ class AnimepaheGui(QWidget):
         self.progress_bar.setMaximum(100)
         self.layout.addWidget(self.progress_bar)
 
-        # --- Episode progress table ---
-        self.episode_table_label = QLabel("Episode Progress")
-        self.layout.addWidget(self.episode_table_label)
-        self.episode_table = QTableWidget(0, 3)
-        self.episode_table.setHorizontalHeaderLabels(["Episode", "Status", "Details"])
-        self.layout.addWidget(self.episode_table)
+        # --- Log ---
+        self.log_output = QTextEdit()
+        self.log_output.setReadOnly(True)
+        self.layout.addWidget(self.log_output)
 
         self.setLayout(self.layout)
-        self.toggle_key_mode()
 
     def state_reset(self):
         self.session_key = None
@@ -217,20 +161,10 @@ class AnimepaheGui(QWidget):
         self.anime_folder = None
         self.min_ep = None
         self.max_ep = None
-        self.download_queue = []
-        self.queue_running = False
-        self.current_queue_index = -1
-        self.current_worker = None
-        self.session_folder_cache = {}
-
-    def _env_with_output_dir(self):
-        env = os.environ.copy()
-        env["ANIMEPAHE_DL_OUTPUT_DIR"] = self.download_dir
-        return env
 
     def log(self, txt):
-        # Basic logging to console (GUI no longer shows log textbox)
-        print(txt)
+        self.log_output.append(txt)
+        self.log_output.ensureCursorVisible()
 
     def refresh_anime_list(self):
         import os
@@ -244,8 +178,7 @@ class AnimepaheGui(QWidget):
             ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh"],
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
-            timeout=60,  # Timeout after 60 seconds if something hangs
-            env=self._env_with_output_dir()
+            timeout=60  # Timeout after 60 seconds if something hangs
         )
         
         # Check if anime.list was created/updated
@@ -267,6 +200,18 @@ class AnimepaheGui(QWidget):
             if not error_msg.strip():
                 error_msg = proc.stdout.decode(errors='ignore') if proc.stdout else "No error message available"
             self.log(f"[ERROR] Failed to refresh list: {error_msg}")
+
+    def toggle_key_mode(self):
+        if self.key_mode_manual.isChecked():
+            self.session_key_input.setEnabled(True)
+            self.search_input.setEnabled(False)
+            self.search_btn.setEnabled(False)
+            self.results_list.setEnabled(False)
+        else:
+            self.session_key_input.setEnabled(False)
+            self.search_input.setEnabled(True)
+            self.search_btn.setEnabled(True)
+            self.results_list.setEnabled(True)
 
     def search_title(self):
         keyword = self.search_input.text().strip()
@@ -312,27 +257,6 @@ class AnimepaheGui(QWidget):
         else:
             self.status_label.setText("No matches found.")
 
-    def toggle_key_mode(self):
-        manual = self.key_mode_manual.isChecked()
-        self.session_key_input.setEnabled(manual)
-        self.use_key_btn.setEnabled(manual)
-        self.search_input.setEnabled(not manual)
-        self.search_btn.setEnabled(not manual)
-        self.results_list.setEnabled(not manual)
-
-    def use_manual_key(self):
-        if not self.key_mode_manual.isChecked():
-            return
-        key = self.session_key_input.text().strip()
-        if not key:
-            QMessageBox.warning(self, "Missing Input", "Please enter a session key.")
-            return
-        self.session_key = key
-        self.selected_line = None
-        self.anime_title = f"Manual Session ({key[:8]})"
-        self.status_label.setText(f"Using manual session key: {key}")
-        self.metadata_fetch()
-
     def select_searched_anime(self):
         row = self.results_list.currentRow()
         if row < 0 or not hasattr(self, 'results_items'):
@@ -346,136 +270,166 @@ class AnimepaheGui(QWidget):
         else:
             self.session_key = key
             self.selected_line = entry[2]
-            self.anime_title = title
             self.status_label.setText(f"Selected: {title}\nSession Key: {self.session_key}")
             self.log(f"[KEY] Using extracted key: {self.session_key}")
             self.metadata_fetch()
 
     def metadata_fetch(self):
+        import os, json, re
         if not self.session_key:
-            self.status_label.setText("Select an anime from the search results first.")
-            return
+            if not self.session_key_input.text().strip():
+                self.status_label.setText("Session key required.")
+                return
+            self.session_key = self.session_key_input.text().strip()
         self.metadata_label.setText("Fetching metadata...")
-        existing_folder = self._get_existing_metadata_folder()
-        if existing_folder and self._load_metadata_from_folder(existing_folder):
-            return
-        proc = subprocess.run(
-            ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", self.session_key, "-e", "1", "-r", "360", "-o", "jpn", "-t", "1", "-l"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=self._env_with_output_dir()
-        )
-        latest_folder = self._get_latest_metadata_folder()
-        if latest_folder and self._load_metadata_from_folder(latest_folder):
-            return
-        self.metadata_label.setText("[ERROR] Could not find metadata folder.")
-        self.log(proc.stderr.decode(errors='ignore'))
-
-    def _sanitize_folder_name(self, title):
-        return re.sub(r'[^0-9A-Za-z ,\+\-\)\(]', '_', title).rstrip()
-
-    def _get_existing_metadata_folder(self):
-        cached = self.session_folder_cache.get(self.session_key)
-        if cached and os.path.exists(os.path.join(cached, '.source.json')):
-            return cached
+        # Determine intended folder directory for this session_key/title
+        folder = None
+        # Try to use the best title (from search or manual)
         if self.selected_line:
             line = self.selected_line
             m = re.match(r"\[([a-zA-Z0-9-]+)\] *(.*)", line)
             if m:
-                folder_candidate = self._sanitize_folder_name(m.group(2).strip())
-                abs_folder_candidate = os.path.join(self.download_dir, folder_candidate)
-                if os.path.isdir(abs_folder_candidate):
-                    return abs_folder_candidate
-        return None
-
-    def _get_latest_metadata_folder(self):
-        candidates = []
-        for d in os.listdir(self.download_dir):
-            abs_d = os.path.join(self.download_dir, d)
-            if os.path.isdir(abs_d):
-                src = os.path.join(abs_d, '.source.json')
-                if os.path.exists(src):
-                    candidates.append(abs_d)
-        candidates.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-        return candidates[0] if candidates else None
-
-    def _load_metadata_from_folder(self, folder_path):
-        source_file = os.path.join(folder_path, '.source.json')
-        if not os.path.exists(source_file):
-            return False
-        try:
-            with open(source_file, encoding="utf-8") as sf:
-                data = json.load(sf)
-        except Exception as e:
-            self.metadata_label.setText(f"[ERROR] Failed to parse metadata: {e}")
-            self.log(f"[META] {e}")
-            return False
-
-        ep_field = 'episodes' if 'episodes' in data else 'data' if 'data' in data else None
-        if not ep_field:
-            self.metadata_label.setText("[ERROR] Metadata missing episodes list.")
-            return False
-
-        eps = [int(e['episode']) for e in data[ep_field] if 'episode' in e]
-        if not eps:
-            self.metadata_label.setText("[ERROR] Metadata contains no episodes.")
-            return False
-
-        min_ep = min(eps)
-        max_ep = max(eps)
-        self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
-        self.anime_folder = folder_path
-        self.min_ep = min_ep
-        self.max_ep = max_ep
-        self.mode_box.setEnabled(True)
-        self.add_queue_btn.setEnabled(True)
-        self.toggle_manual_fields()
-        self.session_folder_cache[self.session_key] = folder_path
-        return True
+                folder_candidate = m.group(2).strip()
+                # Use only safe characters for folder name
+                folder_candidate = re.sub(r'[^a-zA-Z0-9 _\-\(\)\+]', '_', folder_candidate)
+                if os.path.isdir(folder_candidate):
+                    folder = folder_candidate
+        # Otherwise, search for any existing folders matching session_key
+        if not folder:
+            # Use <something> directory where .source.json contains this session_key
+            for d in os.listdir('.'):
+                if os.path.isdir(d):
+                    src = os.path.join(d, '.source.json')
+                    if os.path.exists(src):
+                        try:
+                            with open(src, encoding="utf-8") as sf:
+                                jdata = json.load(sf)
+                                # check slug/key in either top-level or nested data
+                                found = False
+                                if 'episodes' in jdata:
+                                    found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata['episodes'])
+                                if not found and 'data' in jdata:
+                                    found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata['data'])
+                                if found:
+                                    folder = d
+                                    break
+                        except Exception:
+                            pass
+        anime_folder = folder
+        source_file = os.path.join(anime_folder, '.source.json') if anime_folder else None
+        if anime_folder and os.path.exists(source_file):
+            # Reuse present metadata
+            try:
+                with open(source_file, encoding="utf-8") as sf:
+                    data = json.load(sf)
+                    ep_field = 'episodes' if 'episodes' in data else 'data' if 'data' in data else None
+                    if ep_field:
+                        eps = [int(e['episode']) for e in data[ep_field] if 'episode' in e]
+                        min_ep = min(eps)
+                        max_ep = max(eps)
+                        self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
+                        self.anime_folder = anime_folder
+                        self.min_ep = min_ep
+                        self.max_ep = max_ep
+                        self.mode_box.setEnabled(True)
+                        self.download_btn.setEnabled(True)
+                        self.auto_mode_radio.toggled.connect(self.toggle_manual_fields)
+                        self.manual_mode_radio.toggled.connect(self.toggle_manual_fields)
+                        return
+            except Exception as e:
+                self.metadata_label.setText(f"[ERROR] Failed to parse metadata: {e}")
+                self.log(f"[META] {e}")
+                return
+        # If we get here, metadata doesn't exist - run fetch
+        proc = subprocess.run(
+            ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", self.session_key, "-e", "1", "-r", "360", "-o", "jpn", "-t", "1", "-l"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        # Now search for correct folder again (it should exist after fetch)
+        dirs = [d for d in os.listdir('.') if os.path.isdir(d) and not d.startswith('animepahe-dl')]
+        dirs.sort(key=os.path.getmtime, reverse=True)
+        anime_folder = None
+        for d in dirs:
+            src = os.path.join(d, '.source.json')
+            if os.path.exists(src):
+                with open(src, encoding="utf-8") as sf:
+                    try:
+                        jdata = json.load(sf)
+                        ep_field = 'episodes' if 'episodes' in jdata else 'data' if 'data' in jdata else None
+                        found = False
+                        if ep_field:
+                            found = any(str(self.session_key) == str(e.get('session') or e.get('id') or '') for e in jdata[ep_field])
+                        if found:
+                            eps = [int(e['episode']) for e in jdata[ep_field] if 'episode' in e]
+                            min_ep = min(eps)
+                            max_ep = max(eps)
+                            self.metadata_label.setText(f"Episodes available: {min_ep}-{max_ep}")
+                            self.anime_folder = d
+                            self.min_ep = min_ep
+                            self.max_ep = max_ep
+                            self.mode_box.setEnabled(True)
+                            self.download_btn.setEnabled(True)
+                            self.auto_mode_radio.toggled.connect(self.toggle_manual_fields)
+                            self.manual_mode_radio.toggled.connect(self.toggle_manual_fields)
+                            return
+                    except Exception as e:
+                        continue
+        self.metadata_label.setText("[ERROR] Could not find metadata folder.")
+        self.log(proc.stderr.decode(errors='ignore'))
 
     def toggle_manual_fields(self):
         manual = self.manual_mode_radio.isChecked()
         self.episode_input.setEnabled(manual)
         self.resolution_input.setEnabled(manual)
-        self.audio_input.setEnabled(manual)
 
-    def _prepare_download_config(self):
+    def start_download(self):
         if not self.session_key:
-            self.status_label.setText("Select an anime from the search results first.")
-            return None
+            if not self.session_key_input.text().strip():
+                self.status_label.setText("Session key required.")
+                return
+            self.session_key = self.session_key_input.text().strip()
         if not self.anime_folder:
             self.metadata_fetch()
             if not self.anime_folder:
-                return None
+                return
         auto = self.auto_mode_radio.isChecked()
         min_ep = self.min_ep
         max_ep = self.max_ep
         if auto:
             ep_val = f"{min_ep}-{max_ep}"
             res_val = None
-            audio_val = "jpn"
-            audio_val = audio_val.lower()
         else:
             ep_val = self.episode_input.text().strip() or f"{min_ep}-{max_ep}"
             res_val = self.resolution_input.text().strip()
-            audio_val = (self.audio_input.text().strip() or "jpn")
-            audio_val = audio_val.lower()
             valid = self.check_episode_valid(ep_val, min_ep, max_ep)
             if not valid:
                 self.status_label.setText("Invalid episode list!")
-                return None
-        episodes = self._expand_episode_list(ep_val)
-        if not episodes:
-            self.status_label.setText("No valid episodes selected.")
-            return None
-
-        return {
-            "title": self.anime_title or "Unknown",
-            "session_key": self.session_key,
-            "episodes": episodes,
-            "resolution": res_val,
-            "audio": audio_val,
-            "episode_text": ep_val,
-        }
+                return
+        self.log(f"[START] Downloading {ep_val} (res: {res_val if res_val else 'auto'})")
+        cmd = ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", str(self.session_key), "-e", ep_val, "-o", "jpn", "-t", "16"]
+        if res_val:
+            cmd.extend(["-r", res_val])
+        
+        # Calculate total episodes for progress tracking
+        total_eps = self._count_episodes(ep_val, min_ep, max_ep)
+        
+        self.download_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        if total_eps > 0:
+            self.progress_bar.setMaximum(total_eps)
+            self.progress_bar.setFormat("Downloading: %p% (%v/%m episodes)")
+        else:
+            # Indeterminate mode if we can't determine episode count
+            self.progress_bar.setMaximum(0)
+            self.progress_bar.setFormat("Downloading...")
+        
+        self.worker = DownloadWorker(cmd, total_episodes=total_eps)
+        self.worker.log_signal.connect(self.log)
+        self.worker.status_signal.connect(self.status_label.setText)
+        self.worker.progress_signal.connect(self._update_progress)
+        self.worker.done_signal.connect(self._download_finished)
+        self.worker.start()
 
     def check_episode_valid(self, eptext, min_ep, max_ep):
         # Accepts: '1,2,3', '1-4', '3', etc.
@@ -507,136 +461,26 @@ class AnimepaheGui(QWidget):
                 count += (b - a + 1)
         return count
 
-    def _expand_episode_list(self, eptext):
-        import re
-        episodes = []
-        for part in eptext.split(','):
-            part = part.strip()
-            if not part:
-                continue
-            if re.match(r'^[0-9]+$', part):
-                episodes.append(int(part))
-            elif re.match(r'^[0-9]+-[0-9]+$', part):
-                a, b = map(int, part.split('-'))
-                if a <= b:
-                    episodes.extend(range(a, b + 1))
-        return sorted(set(episodes))
-
-    def add_to_queue(self):
-        config = self._prepare_download_config()
-        if not config:
-            return
-        self.download_queue.append(config)
-        display_title = config["title"]
-        ep_range = f"{config['episodes'][0]}-{config['episodes'][-1]}" if len(config['episodes']) > 1 else str(config['episodes'][0])
-        res_text = config['resolution'] if config['resolution'] else "Auto"
-        audio_text = config['audio'] if config['audio'] else "jpn"
-        self.queue_list.addItem(f"{display_title} | Episodes {ep_range} | Res {res_text} | Audio {audio_text}")
-        self.queue_status_label.setText(f"{len(self.download_queue)} item(s) in queue.")
-
-    def remove_selected_queue_item(self):
-        row = self.queue_list.currentRow()
-        if row < 0:
-            return
-        if self.queue_running and row <= self.current_queue_index:
-            self.status_label.setText("Cannot remove items already processed or in progress.")
-            return
-        self.queue_list.takeItem(row)
-        del self.download_queue[row]
-        self.queue_status_label.setText(f"{len(self.download_queue)} item(s) in queue.")
-
-    def clear_queue(self):
-        if self.queue_running:
-            self.status_label.setText("Cannot clear queue while downloads are running.")
-            return
-        self.download_queue.clear()
-        self.queue_list.clear()
-        self.queue_status_label.setText("Queue cleared.")
-
-    def start_queue_downloads(self):
-        if not self.download_queue:
-            self.status_label.setText("Queue is empty. Add items first.")
-            return
-        if self.queue_running:
-            self.status_label.setText("Queue is already running.")
-            return
-        self.queue_running = True
-        self.current_queue_index = 0
-        self._start_queue_item()
-
-    def _start_queue_item(self):
-        if self.current_queue_index >= len(self.download_queue):
-            self.queue_running = False
-            self.queue_status_label.setText("All queued downloads completed.")
-            self.progress_bar.setVisible(False)
-            return
-
-        item = self.download_queue[self.current_queue_index]
-        self.queue_status_label.setText(
-            f"Downloading {item['title']} ({self.current_queue_index + 1}/{len(self.download_queue)})"
-        )
-        episodes = item["episodes"]
-        self._setup_episode_table(episodes)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setMaximum(len(episodes))
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat(f"0/{len(episodes)} episodes")
-
-        self.current_worker = DownloadWorker(item, self.download_dir)
-        self.current_worker.log_signal.connect(self.log)
-        self.current_worker.status_signal.connect(self.status_label.setText)
-        self.current_worker.progress_signal.connect(self._update_progress)
-        self.current_worker.episode_status_signal.connect(self._update_episode_status)
-        self.current_worker.done_signal.connect(self._queue_item_finished)
-        self.current_worker.start()
-
-    def _setup_episode_table(self, episodes):
-        self.episode_table.setRowCount(len(episodes))
-        for idx, ep in enumerate(episodes):
-            self.episode_table.setItem(idx, 0, QTableWidgetItem(str(ep)))
-            self.episode_table.setItem(idx, 1, QTableWidgetItem("Queued"))
-            self.episode_table.setItem(idx, 2, QTableWidgetItem(""))
-        self.episode_table.resizeColumnsToContents()
-
-    def _update_episode_status(self, row, episode, status):
-        if row < 0 or row >= self.episode_table.rowCount():
-            return
-        self.episode_table.setItem(row, 1, QTableWidgetItem(status))
-        detail_text = "Idle"
-        if status == "Downloading":
-            detail_text = "In progress"
-        elif status == "Completed":
-            detail_text = "Done"
-        elif status == "Failed":
-            detail_text = "Check logs"
-        self.episode_table.setItem(row, 2, QTableWidgetItem(detail_text))
-
     def _update_progress(self, value):
         """Update progress bar with new value"""
         if self.progress_bar.maximum() > 0:
             # Determinate mode: value is episode count
             self.progress_bar.setValue(value)
-            total = self.progress_bar.maximum()
-            self.progress_bar.setFormat(f"{value}/{total} episodes")
         else:
             # Indeterminate mode: value is percentage, but we can't set it
             # The bar will pulse automatically in indeterminate mode
             pass
 
-    def _queue_item_finished(self, success):
-        row_item = self.queue_list.item(self.current_queue_index)
-        if row_item:
-            status_text = " [Done]" if success else " [Errors]"
-            if status_text not in row_item.text():
-                row_item.setText(row_item.text() + status_text)
-        self.current_queue_index += 1
-        if self.current_queue_index < len(self.download_queue):
-            self._start_queue_item()
-        else:
-            self.queue_running = False
-            self.queue_status_label.setText("Queue finished.")
-            self.progress_bar.setFormat("Completed")
+    def _download_finished(self, success):
+        """Handle download completion"""
+        self.download_btn.setEnabled(True)
+        if success:
             self.progress_bar.setValue(self.progress_bar.maximum())
+            self.progress_bar.setFormat("Completed: 100%")
+        else:
+            self.progress_bar.setFormat("Failed")
+        # Keep progress bar visible for a moment, then hide after a delay
+        # For now, just keep it visible so user can see final status
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

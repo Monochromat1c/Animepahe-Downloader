@@ -48,7 +48,6 @@ set_var() {
     _REFERER_URL="$_HOST"
 
     _SCRIPT_PATH=$(dirname "$(realpath "$0")")
-    _OUTPUT_PATH="${ANIMEPAHE_DL_OUTPUT_DIR:-$_SCRIPT_PATH}"
     _ANIME_LIST_FILE="$_SCRIPT_PATH/anime.list"
     _SOURCE_FILE=".source.json"
 }
@@ -157,7 +156,7 @@ get_episode_list() {
 
 download_source() {
     local d p n
-    mkdir -p "$_OUTPUT_PATH/$_ANIME_NAME"
+    mkdir -p "$_SCRIPT_PATH/$_ANIME_NAME"
     d="$(get_episode_list "$_ANIME_SLUG" "1")"
     p="$("$_JQ" -r '.last_page' <<< "$d")"
 
@@ -168,13 +167,13 @@ download_source() {
         done
     fi
 
-    echo "$d" > "$_OUTPUT_PATH/$_ANIME_NAME/$_SOURCE_FILE"
+    echo "$d" > "$_SCRIPT_PATH/$_ANIME_NAME/$_SOURCE_FILE"
 }
 
 get_episode_link() {
     # $1: episode number
     local s o l r=""
-    s=$("$_JQ" -r '.data[] | select((.episode | tonumber) == ($num | tonumber)) | .session' --arg num "$1" < "$_OUTPUT_PATH/$_ANIME_NAME/$_SOURCE_FILE")
+    s=$("$_JQ" -r '.data[] | select((.episode | tonumber) == ($num | tonumber)) | .session' --arg num "$1" < "$_SCRIPT_PATH/$_ANIME_NAME/$_SOURCE_FILE")
     [[ "$s" == "" ]] && print_warn "Episode $1 not found!" && return
     o="$("$_CURL" --compressed -sSL -H "cookie: $_COOKIE" "${_HOST}/play/${_ANIME_SLUG}/${s}")"
     l="$(grep \<button <<< "$o" \
@@ -240,7 +239,7 @@ download_episodes() {
     for i in "${origel[@]}"; do
         if [[ "$i" == *"*"* ]]; then
             local eps fst lst
-            eps="$("$_JQ" -r '.data[].episode' "$_OUTPUT_PATH/$_ANIME_NAME/$_SOURCE_FILE" | sort -nu)"
+            eps="$("$_JQ" -r '.data[].episode' "$_SCRIPT_PATH/$_ANIME_NAME/$_SOURCE_FILE" | sort -nu)"
             fst="$(head -1 <<< "$eps")"
             lst="$(tail -1 <<< "$eps")"
             i="${fst}-${lst}"
@@ -335,7 +334,7 @@ decrypt_segments() {
 download_episode() {
     # $1: episode number
     local num="$1" l pl v erropt='' extpicky=''
-    v="$_OUTPUT_PATH/${_ANIME_NAME}/${num}.mp4"
+    v="$_SCRIPT_PATH/${_ANIME_NAME}/${num}.mp4"
 
     l=$(get_episode_link "$num")
     [[ "$l" != *"/"* ]] && print_warn "Wrong download link or episode $1 not found!" && return
@@ -355,7 +354,7 @@ download_episode() {
             local opath plist cpath fname
             fname="file.list"
             cpath="$(pwd)"
-            opath="$_OUTPUT_PATH/$_ANIME_NAME/${num}"
+            opath="$_SCRIPT_PATH/$_ANIME_NAME/${num}"
             plist="${opath}/playlist.m3u8"
             rm -rf "$opath"
             mkdir -p "$opath"
@@ -379,8 +378,8 @@ download_episode() {
 }
 
 select_episodes_to_download() {
-    [[ "$(grep 'data' -c "$_OUTPUT_PATH/$_ANIME_NAME/$_SOURCE_FILE")" -eq "0" ]] && print_error "No episode available!"
-    "$_JQ" -r '.data[] | "[\(.episode | tonumber)] E\(.episode | tonumber) \(.created_at)"' "$_OUTPUT_PATH/$_ANIME_NAME/$_SOURCE_FILE" >&2
+    [[ "$(grep 'data' -c "$_SCRIPT_PATH/$_ANIME_NAME/$_SOURCE_FILE")" -eq "0" ]] && print_error "No episode available!"
+    "$_JQ" -r '.data[] | "[\(.episode | tonumber)] E\(.episode | tonumber) \(.created_at)"' "$_SCRIPT_PATH/$_ANIME_NAME/$_SOURCE_FILE" >&2
     echo -n "Which episode(s) to download: " >&2
     read -r s
     echo "$s"

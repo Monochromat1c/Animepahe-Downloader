@@ -10,14 +10,13 @@ Animepahe Downloader is a tool to search for and download anime episodes from [a
 
 ## Features
 
-- **Modern GUI Interface** – User-friendly graphical interface with search, manual session-key entry, queue management, and per-episode progress tracking
-- Download by searching the anime list *or* by pasting a session key directly (CLI & GUI)
+- **Modern GUI Interface** - User-friendly graphical interface with search, progress tracking, and real-time logs
+- Search and download anime by name or directly via anime slug/UUID
 - Download specific episodes, ranges, or all episodes at once
-- Choose desired video resolution and audio language (defaults to highest res / `jpn`)
-- Real-time download progress bar and per-episode status table
-- Smart metadata caching in your Windows Downloads folder
-- Easy-to-use interactive terminal interface (`run.sh`) with manual/search key selection
-- Original `animepahe-dl.sh` maintained for direct CLI usage
+- Choose desired video resolution and audio language
+- Real-time download progress bar with episode tracking
+- Easy-to-use interactive terminal interface
+- Enhanced usability with the `run.sh` script for automated and guided downloads
 
 ---
 
@@ -74,22 +73,25 @@ python animepahe_gui.py
 ```
 
 **Features:**
-- **Anime List Refresh** – Update the anime database with one click
-- **Dual Key Input** – Search titles *or* paste a session key manually
-- **Metadata Fetching** – Automatically fetch & reuse episode information (stored in your Downloads folder)
+- **Anime List Refresh** - Update the anime database with one click
+- **Title Search** - Search for anime by keyword with clean, key-free results
+- **Session Key Input** - Enter session keys manually or extract from search results
+- **Metadata Fetching** - Automatically fetch episode information with smart caching
 - **Download Modes:**
   - **Automatic Mode** - Download all episodes in highest resolution
-  - **Manual Mode** - Choose episodes, resolution, and audio language
-- **Download Queue** – Queue multiple anime with per-episode tracking
-- **Per-Episode Progress Table** – See status for each episode (Queued/Downloading/Completed/Failed)
-- **Default Output** – Files are saved to your Windows `Downloads` folder (configurable via `ANIMEPAHE_DL_OUTPUT_DIR`)
-- **Non-blocking** – GUI remains responsive during downloads
+  - **Manual Mode** - Choose specific episodes and resolution
+- **Real-time Progress** - Progress bar showing episode download status
+- **Live Logs** - See download progress and status messages in real-time
+- **Non-blocking** - GUI remains responsive during downloads
+
+The GUI maintains full feature parity with the terminal scripts while providing a significantly improved user experience.
 
 ### 2. Modern Run Script (Terminal)
 
 The included `run.sh` script provides an interactive and user-friendly terminal interface:
 - Refresh/rebuild anime list
-- Choose between entering a session key manually or searching the anime list
+- Search anime titles
+- Select anime based on list or key
 - Automatically fetch episode metadata
 - Choose automatic/all vs manual download mode
 - Optionally specify episodes and video resolution interactively
@@ -136,9 +138,9 @@ See `./animepahe-dl.sh --help` for a detailed option list and examples.
 - **Original codebase:** [github.com/KevCui/animepahe-dl](https://github.com/KevCui/animepahe-dl)
   - Major credit and thanks to [KevCui](https://github.com/KevCui) and contributors for the base script and core download logic.
 - **Current fork/clone:** This repository adds:
-  - A modern **PyQt5 GUI** (`animepahe_gui.py`) with queueing, manual key entry, and per-episode progress
-  - The `run.sh` script for enhanced terminal interactivity (manual/search key options)
-  - Progress tracking, metadata caching (Downloads folder), and improved user experience features
+  - A modern **PyQt5 GUI** (`animepahe_gui.py`) for graphical user interface
+  - The `run.sh` script for enhanced terminal interactivity and workflow improvements
+  - Progress tracking, metadata caching, and improved user experience features
 
 ## License
 

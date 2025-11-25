@@ -9,9 +9,6 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-DOWNLOAD_DIR="${HOME}/Downloads"
-mkdir -p "$DOWNLOAD_DIR"
-
 # Auto-refresh anime list
 echo "[INFO] Refreshing anime list..."
 ./animepahe-dl.sh --list > /dev/null 2>&1
@@ -81,6 +78,7 @@ ask_key() {
     echo -e "${BLUE}========================================${NC}"
     echo -e "${CYAN}AnimePahe Key Selection${NC}"
     echo -e "${BLUE}========================================${NC}"
+
     echo -e "${YELLOW}1.${NC} Enter session key manually"
     echo -e "${YELLOW}2.${NC} Search for anime title (from anime.list)"
 
@@ -89,9 +87,7 @@ ask_key() {
         case $opt in
             1)
                 read -p "$(echo -e "${GREEN}Enter session key:${NC} ")" KEY
-                if [[ -n "$KEY" ]]; then
-                    break
-                fi
+                [[ -n "$KEY" ]] && break
                 echo -e "${RED}[ERROR] Key cannot be empty.${NC}"
                 ;;
             2)
@@ -112,7 +108,7 @@ ask_key() {
 fetch_metadata() {
     echo -e "\n${YELLOW}* Fetching episode data...${NC}"
 
-    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e 1 -r 360 -o jpn -t 1 -l >/dev/null 2>&1
+    ./animepahe-dl.sh -s "$KEY" -e 1 -r 360 -o jpn -t 1 -l >/dev/null 2>&1
 
     ANIME_FOLDER=$(ls -d */ 2>/dev/null | grep -v "animepahe-dl" | head -1)
     ANIME_FOLDER="${ANIME_FOLDER%/}"
@@ -231,30 +227,6 @@ ask_resolution() {
 }
 
 # ---------------------------------
-# Manual: Ask audio language
-# ---------------------------------
-ask_audio() {
-    echo -e "\n${BLUE}--- Audio Selection ---${NC}"
-    echo -e " ${CYAN}Press ENTER for default 'jpn' audio${NC}"
-
-    while true; do
-        read -p "$(echo -e "${GREEN}Audio language code (e.g., jpn, eng):${NC} ")" AUDIO
-
-        if [[ -z "$AUDIO" ]]; then
-            AUDIO="jpn"
-            break
-        fi
-
-        if [[ "$AUDIO" =~ ^[a-zA-Z]+$ ]]; then
-            AUDIO=${AUDIO,,}
-            break
-        else
-            echo -e "${RED}[ERROR] Invalid audio code. Letters only.${NC}"
-        fi
-    done
-}
-
-# ---------------------------------
 # Main
 # ---------------------------------
 ask_key
@@ -268,19 +240,18 @@ if [[ "$AUTO_MODE" = true ]]; then
     echo -e "${CYAN}Downloading ALL episodes in highest resolution...${NC}"
     echo -e "${CYAN}Episode range: $EPISODE${NC}"
 
-    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o jpn -t 16
+    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o jpn -t 16
     exit
 fi
 
 # Manual mode:
 ask_episode
 ask_resolution
-ask_audio
 
 echo -e "\n${YELLOW}* Starting Manual Download...${NC}"
 
 if [[ "$AUTO_RES" = true ]]; then
-    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o "$AUDIO" -t 16
+    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -o jpn -t 16
 else
-    ANIMEPAHE_DL_OUTPUT_DIR="$DOWNLOAD_DIR" ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -r "$RESOLUTION" -o "$AUDIO" -t 16
+    ./animepahe-dl.sh -s "$KEY" -e "$EPISODE" -r "$RESOLUTION" -o jpn -t 16
 fi
