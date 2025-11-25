@@ -26,28 +26,24 @@ class DownloadWorker(QThread):
         completed_episodes = set()
         for line in proc.stdout:
             self.log_signal.emit(line.rstrip())
-            # Try to parse episode progress from log output
-            # Look for patterns like "Downloading Episode X" or completion indicators
+            # Only advance progress when we see .mp4 written, 'completed', or 'finished', not just 'Downloading Episode'
             if self.total_episodes and self.total_episodes > 0:
-                # Look for episode numbers in the output
-                ep_match = re.search(r'[Ee]pisode\s+(\d+)', line)
-                if ep_match:
-                    ep_num = int(ep_match.group(1))
+                # Look for episode numbers on real completion (mp4 written or similar only)
+                mp4_match = re.search(r'(Episode\s+)?([0-9]+)\.mp4', line)
+                if mp4_match:
+                    ep_num = int(mp4_match.group(2))
                     if ep_num not in completed_episodes:
                         completed_episodes.add(ep_num)
-                        # Emit episode count (progress bar max is set to total_episodes)
                         self.progress_signal.emit(len(completed_episodes))
-                # Also check for completion indicators like "Episode X.mp4" or similar
-                if re.search(r'\.mp4|completed|finished', line, re.IGNORECASE):
-                    # If we see completion indicators, update progress
+                elif re.search(r'completed|finished', line, re.IGNORECASE):
+                    # In ambiguous log cases, just increment
                     if len(completed_episodes) < self.total_episodes:
-                        self.progress_signal.emit(len(completed_episodes))
+                        self.progress_signal.emit(len(completed_episodes) + 1)
         proc.wait()
         # Set progress to max when done
         if self.total_episodes and self.total_episodes > 0:
             self.progress_signal.emit(self.total_episodes)
         else:
-            # For indeterminate mode, emit 100 for percentage
             self.progress_signal.emit(100)
         if proc.returncode == 0:
             self.status_signal.emit("Download completed!")
@@ -126,13 +122,18 @@ class AnimepaheGui(QWidget):
 
         # --- Manual: Episode/Resolution ---
         self.episode_input = QLineEdit()
-        self.episode_input.setPlaceholderText("e.g., 1,2,5-10 for episodes; leave blank for all")
+        self.episode_input.setPlaceholderText("e.g., 1,2,5-10 for episodes; leave blank for all episodes (default)")
         self.episode_input.setEnabled(False)
         self.layout.addWidget(self.episode_input)
         self.resolution_input = QLineEdit()
-        self.resolution_input.setPlaceholderText("e.g., 720; leave blank for auto")
+        self.resolution_input.setPlaceholderText("e.g., 720; leave blank for highest resolution (default)")
         self.resolution_input.setEnabled(False)
         self.layout.addWidget(self.resolution_input)
+
+        self.audio_input = QLineEdit()
+        self.audio_input.setPlaceholderText("e.g., jpn, eng, chi; leave blank for jpn (default)")
+        self.audio_input.setEnabled(False)
+        self.layout.addWidget(self.audio_input)
 
         # --- Download ---
         self.download_btn = QPushButton("Start Download")
@@ -381,6 +382,7 @@ class AnimepaheGui(QWidget):
         manual = self.manual_mode_radio.isChecked()
         self.episode_input.setEnabled(manual)
         self.resolution_input.setEnabled(manual)
+        self.audio_input.setEnabled(manual)
 
     def start_download(self):
         if not self.session_key:
@@ -398,15 +400,17 @@ class AnimepaheGui(QWidget):
         if auto:
             ep_val = f"{min_ep}-{max_ep}"
             res_val = None
+            audio_val = "jpn"
         else:
             ep_val = self.episode_input.text().strip() or f"{min_ep}-{max_ep}"
             res_val = self.resolution_input.text().strip()
+            audio_val = self.audio_input.text().strip() or "jpn"
             valid = self.check_episode_valid(ep_val, min_ep, max_ep)
             if not valid:
                 self.status_label.setText("Invalid episode list!")
                 return
-        self.log(f"[START] Downloading {ep_val} (res: {res_val if res_val else 'auto'})")
-        cmd = ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", str(self.session_key), "-e", ep_val, "-o", "jpn", "-t", "16"]
+        self.log(f"[START] Downloading {ep_val} (res: {res_val if res_val else 'auto'}, audio: {audio_val})")
+        cmd = ["C:\\Program Files\\Git\\bin\\bash.exe", "animepahe-dl.sh", "-s", str(self.session_key), "-e", ep_val, "-o", audio_val, "-t", "16"]
         if res_val:
             cmd.extend(["-r", res_val])
         
