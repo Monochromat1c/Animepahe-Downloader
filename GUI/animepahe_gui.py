@@ -23,6 +23,7 @@ class DownloadWorker(QThread):
         import subprocess
         import re
         proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1, universal_newlines=True)
+        self.proc = proc  # store for stopping
         completed_episodes = set()
         for line in proc.stdout:
             self.log_signal.emit(line.rstrip())
@@ -32,6 +33,13 @@ class DownloadWorker(QThread):
                 mp4_match = re.search(r'(Episode\s+)?([0-9]+)\.mp4', line)
                 if mp4_match:
                     ep_num = int(mp4_match.group(2))
+                    if ep_num not in completed_episodes:
+                        completed_episodes.add(ep_num)
+                        self.progress_signal.emit(len(completed_episodes))
+                # increment also on 'Downloading Episode X'
+                ep_start_match = re.search(r"Downloading Episode\s+(\d+)", line)
+                if ep_start_match:
+                    ep_num = int(ep_start_match.group(1))
                     if ep_num not in completed_episodes:
                         completed_episodes.add(ep_num)
                         self.progress_signal.emit(len(completed_episodes))
@@ -576,6 +584,12 @@ class AnimepaheGui(QWidget):
 
     def stop_download(self):
         if hasattr(self, 'worker') and self.worker.isRunning():
+            # Ensure the DownloadWorker also tries to kill the proc
+            try:
+                if hasattr(self.worker, 'proc') and self.worker.proc and self.worker.proc.poll() is None:
+                    self.worker.proc.terminate()
+            except Exception:
+                pass
             self.worker.terminate()
             self.stop_btn.setEnabled(False)
             self.status_label.setText("Download stopped by user.")
